@@ -1,0 +1,829 @@
+/*
+Macro written by Arthur Lensen (contact : arthurlensen@outlook.fr or arthur.lensen@ens.fr) from the 6-09-21 to the 11-02-22 Under Margarida Castro Gomes Spencer supervision, 
+in Serge Mostowy's lab, London School of Hygiene and Tropical medicine, London. 
+This macro was designed to allow neutrophil counting or total fluorescence measurement in zebrafish larvae imaged by a CD7 Zeiss microscope, but can be adapted to different usages.
+It is also able to return information on the neutrophils characteristics (shape, size, position...)
+
+Several important points are to take into account for adaptation of the macro :
+- If your aim is to count the number of granules in an image, it might be useful to change some parameters (Rolling ball averages and thresholding methods). 
+  These parameters to change can be found : 
+  		- lines 114, 116, 123, 124 for analysis of Z stacks
+  		- line 411 for single plane images with several frames
+  		- line 458 for single plane images with one frame
+  		- line 531 for optimizing the macro (this thresholding technique need to be consistent with the one used in lines 458 and 411.
+*/
+
+run ("Close All");																					 	// Clean up space
+run("Bio-Formats Macro Extensions");																	// Export an extension to open czi files (also adapted to a wide range of different files) 
+
+Dialog.create("Set Measurements");																		// Open first dialog box
+Dialog.addCheckbox("Batch measure number of granules", false);											//  |Checkboxes for each kind of analysis
+Dialog.addCheckbox("Measure total fluorescence", false);												//	|
+Dialog.addCheckbox("Measure granules characteristics", false);											//	|
+Dialog.show();																							// Show first dialog box
+NbNeut=Dialog.getCheckbox();																			//  | Read the checkboxes 
+BactBurden=Dialog.getCheckbox();																		//	|
+charact=Dialog.getCheckbox();																				//	|
+
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+  if (NbNeut){																							// If you want to count Nb of Neutrophils
+  	RBA1=0;																								//  | Initialization of useful values
+	RBA2=0;																								//	|
+	minsize=0;																							//	|
+	flu=1;
+	bf=1;																								//	|
+	
+	title = "Initial values";																			// New dialog box
+  	width=512; height=512;																				// size of the new dialog box
+  	Dialog.create("Do you know the ideal parameters for your analysis ?");								// Open new dialog box
+  	Dialog.addCheckbox("Are your files Z-stacks ?", false);												//  | Checkboxes for each parameters of the images
+  	Dialog.addMessage("Wich channel is the brightfield ?");												// Add question
+  	Dialog.addNumber("", bf);																			// Window to enter the number of the channel that you want to analyzw
+  	Dialog.addMessage("Wich channel is the fluorescent channel ?");										// Add question
+  	Dialog.addNumber("", flu);	  																		//	|
+  	Dialog.addCheckbox("Do you know the ideal parameters for your analysis ?", false);					//  | Check yes if it is the first time you use this kind of images
+  	Dialog.addMessage("\n \n If yes, enter the ideal parameters : ");									//  || Ask the values of the best parameters for the analysis, if known
+  	Dialog.addMessage("Enter value for rolling ball average 1");										//	||
+  	Dialog.addNumber("", RBA1);																			//	||
+  	Dialog.addMessage("Enter value for rolling ball average 2");										//	||
+  	Dialog.addNumber("", RBA2);																			//	||
+  	Dialog.addMessage("Enter value for minimum size of the particles");									//	||
+ 	Dialog.addNumber("", minsize);																		//	||
+  	Dialog.show();																						// Show new dialog box
+  	zstack=Dialog.getCheckbox();																		//  | Read the checkboxes and values collected
+  	bf=Dialog.getNumber();	
+  	flu=Dialog.getNumber();																				//	|
+  	idparam=Dialog.getCheckbox();																		//	|
+  	RBA1=Dialog.getNumber();																			//	|
+	RBA2=Dialog.getNumber();																			//	|
+	minsize=Dialog.getNumber();																			//	|
+  	if (zstack){																						// If your files are Z-stacks
+		Directory=getDirectory("Choose a directory"); 													// Choose your files				 
+		SaveDirectory=getDirectory("Where do you want to save ROI lists ?");							// Choose where you want to save your results
+		zstackprocessBioFormatFiles(Directory);															// Analysis with the function just below	 					 
+
+		function zstackprocessBioFormatFiles(currentDirectory) {
+			fileList = getFileList(currentDirectory); 												    //Return an array with the files contained in the directory
+			Table.create("Results");
+			Titles=newArray("0");
+			numberROIs=newArray("0");
+			for (file = 0; file < fileList.length; file++) {			 								//Loop, for each file in the directory
+				Ext.setId(currentDirectory + fileList[file]);										    //Initializes a file in the directory
+				Ext.getSeriesCount(seriesCount);   													    //Get the number of image series in the dataset
+				for (series = 1; series <= 1; series++) { 												//loop, for each image in the dataset	
+					run("Bio-Formats Importer", "open=[" + currentDirectory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack virtual=true stack_order=XYCZT series_"+series);
+					ImageName = getTitle();
+					run("Split Channels");
+					selectWindow("C3-"+ ImageName);
+					close();
+					selectWindow("C2-"+ ImageName);
+					close();
+					selectWindow("C1-"+ ImageName);
+					original=getImageID(); 															   // Stock image iD
+					getDimensions(width, height, channels, slices, frames);
+					for (i = 0; i < frames; i++) {
+					run("Duplicate...", "title=["+ImageName+" Time="+i+1+"] duplicate frames="+i+1+"");
+					ImageNameframe = getTitle();
+					selectWindow(ImageNameframe);
+					run("Duplicate...", "duplicate title =["+ImageName+"]");
+					RBA3=getImageID();
+					run("Duplicate...", "duplicate title =["+ImageName+"]"); 						  // Using different rolling ball averages (preprocessing)
+					RBA4=getImageID();
+					selectImage(RBA3);
+					run("Subtract Background...", "rolling=200"); 			 						  // Substract background
+					RBA3=getImageID();
+					selectImage(RBA4);
+					run("Subtract Background...", "rolling=100");			    					  // Same
+					RBA4=getImageID();
+	
+					imageCalculator("Add create stack", RBA3 , RBA4);								  // Add pixels value of the 2 images
+					setOption("BlackBackground", true);
+					run("Z Project...", "projection=[Standard Deviation]");
+					projection=getImageID(); 
+	
+				
+					run("Duplicate...", "duplicate title =["+ImageName+"]");
+					RBA1=getImageID();
+					run("Duplicate...", "duplicate title =["+ImageName+"]"); 						   // Using different rolling ball averages (normal processing)
+					RBA2=getImageID();
+					selectImage(RBA1);
+					run("Subtract Background...", "rolling=10"); 			 						   // Substract background
+					RBA1=getImageID();
+					selectImage(RBA2);
+					run("Subtract Background...", "rolling=9");			     						   // Same
+					RBA2=getImageID();
+	
+					imageCalculator("Add", RBA1 , RBA2);											   // Add pixels value of RBA3 and RBA20
+					product=getImageID(); 
+	
+				
+					setAutoThreshold("Triangle dark");
+					run("Convert to Mask", "method=Triangle background=Dark black");	
+					run("Open");
+					run("Close-");
+					run("Fill Holes");
+					run("Watershed");
+					binary=getImageID(); 
+	
+					roiManager("reset");
+					run("Analyze Particles...", "circularity=0-1.00 size=20-Infinity show=Overlay exclude add "); //Record particles in the ROI manager
+					roiManager("Show All without labels");					 						  // Outline particles
+	
+					allROIs=newArray("0");															  // Variable initialization
+					if (0<roiManager("count")) {
+
+						for (k=1;k<roiManager("count");k++) { 										  // Loop to get total number of ROIs and select them all
+							allROIs = Array.concat(allROIs,k);
+							}
+						selectImage(projection);
+						roiManager("Select", allROIs);
+						roiManager("Add");															  // Add all selected ROIs to original image
+						roiManager("Set Color", "red");
+						roiManager("Set Line Width", 1);											  // Outline them with red lines
+						run("Flatten");																  // Embed red lines in the picture (for visual output)
+			
+						Titles=Array.concat(Titles,ImageNameframe);								      // Store the image name
+						numberROIs=Array.concat(numberROIs,roiManager("count"));					  // And associates a number of ROIs for each image
+						roiManager("Save", SaveDirectory+file+ImageNameframe+"RoiSet.zip");
+						}
+					selectImage(original);
+					close("\\Others");
+					run("Collect Garbage");
+					}
+				close("*");
+				run("Collect Garbage");
+				}
+			Table.setColumn("Titles", Titles);														   // Show results in a table
+			Table.setColumn("Number of ROIs", numberROIs);
+				}
+			}
+  		}
+  	}
+  	if (idparam){																						// If you know the best parameters for your analysis	
+		Directory=getDirectory("Choose a directory"); 													// Collect the path to the files	
+		SaveDirectory=getDirectory("Where do you want to save ROI lists ?");							// Collect the path where you want to save the ROIs
+		processBioFormatFiles(Directory,SaveDirectory,RBA1,RBA2,minsize,flu);			 				// Count neutrophils cf function below
+  		if (charact) {
+		coord(Directory,SaveDirectory,bf);
+		characterization(Directory,SaveDirectory,flu);
+  		}
+  	}
+
+  	else {																								// If you do not know the ideal parameters
+  		x=0;																							//  | Initialization of useful values - RBA 1
+		y=0;																							//  | - RBA 2
+		z=0;																							//  | - min size
+		values=0;																						//  | - number of neutrophils counted by the macro
+		p_values=0;																						//  | - max parametric value you want to test for both RBA
+		start=0;																						//  | - min parametric value you want to test for both RBA
+		number=0;																						//  | - max parametric value you want to test for min size
+		ref=newArray();																					//  | - will store the number of handcounted neutrophils for every file used in the training
+		title = "Initial values";																		// New dialog box
+		width=512; height=512;																			// size of the new dialog box
+ 		Dialog.create("How many files are used for the training ?");									// Open new dialog box
+ 	    Dialog.addMessage("We will thus cycle through parametric values to determine the best set of parameters for the analysis");
+ 	    Dialog.addMessage("How many files are used for the training ?");								//  | Ask for the training parameters
+ 		Dialog.addNumber("", values);																	//  |
+ 		Dialog.addMessage("How many parametric values do you want to test ?");							//  |
+ 		Dialog.addNumber("", p_values);																	//  |
+ 		Dialog.addMessage("at which parametric value do you want to start the analysis ?");				//  |
+ 		Dialog.addNumber("", start);																	//  |
+ 		Dialog.addMessage("How many minimum sizes do you want to try ? (starting from 0)");				//  |
+ 		Dialog.addNumber("", number);																	//  |
+ 		Dialog.show();																					// Show dialog window
+		values=Dialog.getNumber();																		//  | Collect the values entered just before
+		p_values=Dialog.getNumber();																	//  |
+		start=Dialog.getNumber();																		//  |
+		number=Dialog.getNumber();																		//  |
+		
+		for (i = 1; i <= values; i++) {																	// * Start of loop on i to collect number of handcounted neutrophils for each image
+			value=0;																					// * Initialize the variable that will record this number in the loop - for one image
+			title = "Initial values";																	// * Create new dialog window
+  			width=512; height=512;																		// * Dimensions of the new dialog window
+ 			Dialog.create("Enter value for file N'"+i+"");												// * Open the new dialog window
+ 			Dialog.addMessage("Enter hand counted number of cells for file N'"+i+"");					// * | ask the number of handcounted neutrophils for file n°i
+ 			Dialog.addNumber("", value);																// * |
+ 			Dialog.show();																				// * Show the new dialog window
+ 			value=Dialog.getNumber();																	// * Collect the value entered just before
+ 			ref=Array.concat(ref,value);																// * Store the number of neutrophils in an Array - the rank of the value correspond to the rank of the file in the folder
+		}																								// * Go back to the beginning of the loop - go to next file
+		Array.print(ref);																				// Print the Array with the values collected before in the Log window
+		
+		x_values=newArray();																			// | Initialization of useful values - Array that will stock the value of the tested RBA1
+		y_values=newArray();																			// | - Array that will stock the value of the tested RBA2
+		z_values=newArray();																			// | - Array that will stock the value of the tested min sizes
+		min0=newArray(100000,0);																		// | - will stock the array with the minimum distances between the macro and the hand count results
+		miny=0;																							// | - will stock the value of RBA2 for which the distances between the macro and the hand count results are the lowest
+		minx=0;																							// | - will stock the value of RBA1 for which the distances between the macro and the hand count results are the lowest
+		Directory=getDirectory("Choose a directory"); 													// Collect the path to the files
+		Table.create("Find minimal distance");															// Create a table to store the distances between the handcount results and the macro results
+
+		if (zstack){
+			print("use other macro");			
+		}
+
+		
+		for (x = start; x <= start+p_values; x++) {														// * Loop through RBA1 values, in the range indicated before
+			Aminy=newArray();																			// * Initialize useful values - store the RBA2 values tested
+			mean_diff_values=newArray(100000,100000);													// * - Store and initialize the array containing the mean distances between hand count and macro count. These values are huge in order to be bigger than any possible distance that will be stored here.
+			for (y = 0; y <= x; y++) {																	// * * Loop through RBA1 values, in the range indicated before
+				Aminy=Array.concat(Aminy,y);															// * * Add the tested RBA2 in the array that store it
+				if (zstack){
+					print("use other macro");
+					}
+				else {																					// * * *  If the file is not a z stack
+					result=loopprocessBioFormatFiles(Directory,x,y,z,flu);								// * * * Count neutrophils in the training files, using current RBA1,2 and min size of 0
+					difference=newArray();																// * * * Initialize the array that will contain the distances between hand count and macro count for every file
+					for (k = 0; k < result.length; k++) {												// * * * | Loop through the results of the macro count
+						diff=(abs(result[k]-ref[k]));													// * * * | Calculate the difference between the hand count and the macro count for the current parametric values
+						difference=Array.concat(difference,diff);										// * * * | Store the result in the array created just before
+					}																					// * * *
+					mean_diff=0;																		// * * * Initialization of useful values - will hold the average difference on the set of results produced with the files used for the training
+					sum=0;																				// * * * - Variable used in the loop just below, used for calculation
+					for (k = 0; k < difference.length; k++) {											// * * * | Loop through the results of the difference calculations - array created in the previous loop
+						sum+=difference[k];																// * * * | Add up every difference
+					}																					// * * *
+					mean_diff=(sum/difference.length);													// * * * Calculate the mean difference accross the results collected with training files
+					mean_diff_values=Array.concat(mean_diff_values,mean_diff);							// * * * Store this result in an array
+					print(" RBA 1 : ",x," RBA 2 : ",y);													// * * * Print - in the log window - the RBA1 and RBA2 values that have been tested during this loop
+					print("mean difference: ", mean_diff);												// * * * Print - in the log window - the mean difference computed for these RBA1 and 2 values
+				}																						// * *
+			}																							// * Go back to top of the loop, test another RBA 2 value
+			min=Array.findMinima(mean_diff_values, 0);													// * Find the minimal value in the array of mean differences that were calculated in the previous loop - so for a fixed RBA 1 value, and variable RBA 2 values
+			if (mean_diff_values[min[0]]<min0[0]) {														// * If this minimal value is inferior to the minimal value found for the previously tested RBA 1 value then...
+				min0[0]=mean_diff_values[min[0]];														// * ...This value is stored as the minimal value found across all the RBA 1 and RBA 2 values tested
+				miny=Aminy[min[0]-2];																	// * Furthermore the RBA 2...
+				minx=x;																					// * ... And the RBA 1 values associated to this minimal distance are stored
+				print("Current best RBA 1 value = "+minx);												// * the current best RBA 1 value is printed
+			}																							// *
+			selectWindow("Find minimal distance");														// * Select the window to print the distances
+			Table.setColumn("RBA 1 ="+x+"", mean_diff_values);											// * Print the min distance values computed for each RBA 2 values tested, and the current RBA 1 value								
+		}																								// Go back to top of the loop and test the next RBA 1 value
+		
+		minz=10000;																						// | Initialization of useful values - will hold the value of the best minimun size
+		min0=newArray(100000,0);																		// | - will hold the value of the minimal distance found across all the tests of minimum size values
+		Table.create("Find minimal distance - min size");												//  Create a table to store the distances between the handcount results and the macro results
+		
+		for (z = 0; z < number; z++) {																	// * Loop through minimum size values, in the range indicated before
+			column_mean_diff=newArray();																// * Initialize the array that will store the mean distances calculated for every minimum size tested
+			mean_diff=0;																				// * Variable that will hold the mean distance for every min size tested
+			if (zstack){
+					print("use other macro");
+				}
+				else {																					// * * If the file is not a z stack
+					result=loopprocessBioFormatFiles(Directory,minx,miny,z,flu);						// * * Measure the number of neutrophils using the best RBA 1, the best RBA 2 and the current min size		
+			difference=newArray();																		// * * Will hold the difference between the hand count and the macro results
+			for (k = 0; k < result.length; k++) {														// * * | Loop through the results of the macro
+				diff=(abs(result[k]-ref[k]));															// * * | Calculate the difference between the hand count and the macro count for the current parametric values
+				difference=Array.concat(difference,diff);												// * * | Stores this value in an array
+			}
+			sum=0;																						// * * Initialization of useful value - used in the loop to calculate the mean value of the array containing the differences
+			for (k = 0; k < difference.length; k++) {													// * * | Loop through the values of the array containing the differences
+				sum+=difference[k];																		// * * | Adds up all the values in the array
+			}
+			mean_diff=(sum/difference.length);															// * * Calculate the mean value of the differences array
+			column_mean_diff=Array.concat(column_mean_diff,mean_diff);									// * * Store this value in an array
+			print(" min RBA1 : ",minx," min RBA 2 : ",miny," current min size : ",z);					// * * Print - in the log window - the best RBA1 and RBA2 values previously found, and the currently tested min size
+			print("mean difference: ", mean_diff);														// * * Print - in the log window - the mean difference associated with these parametric values
+			if (mean_diff<min0[0]) {																	// * * Check wether the current mean difference is the minimum of all the other mean differences computed
+				min0[0]=mean_diff;																		// * * - If it is then the value is stored as the minimal mean difference found until now
+				minz=z;																					// * * - and the associated parametric value of the minimum size is also stored
+			}
+			selectWindow("Find minimal distance - min size");											// * * Select the table created just before this loop
+			Table.setColumn("Z="+z+"", column_mean_diff);												// * * Print the mean differences computed for each min size tested
+				}
+				}
+
+		title = "Ideal parameters";																		// New dialog box
+  		width=512; height=512;																			// Size of new dialog box
+ 		Dialog.create("ideal parameters");																// Open new dialog box														
+ 		Dialog.addMessage("after calculation on"+values+" files, the calculated ideal parameters are : \n Rolling ball average 1 :     "+minx+"\n Rolling ball average 2 :     "+miny+"\n minimum size of the particles :     "+minz);
+ 		Dialog.addCheckbox("Do you want to launch the analysis on your entire dataset with these parameters ?",true); // Add checkbox after printing the results of the previous analysis
+ 		analysis=Dialog.getCheckbox();																	// Read checkbox
+ 		Dialog.show();																					// Show dialog box
+
+ 		 if (analysis){																					// | If the checkbox was ticked
+ 		 	Directory=getDirectory("Choose a directory"); 												// | Stores path to the files to analyze
+ 		 	SaveDirectory=getDirectory("Where do you want to save ROI lists ?");						// | Stores path to the directory where to save ROIs characteristics
+ 		 	if (zstack){ 		 																
+				print("use other macro");
+			}
+			else {																						// | If the files are not Z-stacks
+				processBioFormatFiles(Directory,SaveDirectory,minx,miny,minz,flu);						// | Count neutrophils using the previously found parametric values
+			}
+ 		 }
+  }	
+  }
+
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+  if (BactBurden){																						// If you want to measure the total fluorescence
+  	channel=1;																							// Initialize useful value - channel that you want to analyze
+  	title = "Channel ?";																				// Give a title to new dialog box																				
+  	width=512; height=512;																				// Dimensions of new dialog box
+  	Dialog.create("Wich channel do you want to analyze ?");												// Create new dialog box
+  	Dialog.addMessage("Wich channel do you want to analyze ?");											// Add question
+  	Dialog.addNumber("", channel);																		// Window to enter the number of the channel that you want to analyzw
+  	Dialog.show();																						// Show dialog box
+  	channel=Dialog.getNumber();																			// Get the number of the channel
+  	//setBatchMode(true);																				// Batch mode - hide every window except the results
+  	Directory=getDirectory("Choose a directory");														// Stores the path to the files to analyze
+  	bacterialburden(Directory,channel);																	// Measure total fluorescence
+  }
+
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+  if (charact){
+  	if (NbNeut) {
+  		
+  	}
+  	else {
+	bf=1;																								// Initialize useful value - channel that you want to analyze
+  	flu=1;
+  	title = "Channel ?";																				// Give a title to new dialog box																				
+  	width=512; height=512;																				// Dimensions of new dialog box
+  	Dialog.create("Wich channel do you want to analyze ?");												// Create new dialog box
+  	Dialog.addMessage("Wich channel is the brightfield ?");												// Add question
+  	Dialog.addNumber("", bf);																			// Window to enter the number of the channel that you want to analyzw
+  	Dialog.addMessage("Wich channel is the fluorescent channel ?");										// Add question
+  	Dialog.addNumber("", flu);	  
+  	Dialog.show();																						// Show dialog box
+  	bf=Dialog.getNumber();	
+  	flu=Dialog.getNumber();
+  	ROIDirectory=getDirectory("Choose a ROI directory"); 
+	Directory=getDirectory("Choose a image directory");
+	coord(Directory,ROIDirectory,bf);
+	characterization(Directory,ROIDirectory,flu);
+	}
+  }
+  
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+function processBioFormatFiles(currentDirectory,SaveDirectory,RBA1,RBA2,minsize,channel) {				// Function to effectively count neutrophils
+	fileList = getFileList(currentDirectory);															// Return an array with the files contained in the directory
+	Table.create("Nb granules");																		// Create table that will store the results
+	Titles=newArray();																					// Initialize Array that will store the title of each file
+	numberROIs=newArray();																				// Initialize Array that will store the number of Neutrophils in each file
+	for (file = 0; file < fileList.length; file++) {													// * Loop through the files in the directory
+		Ext.setId(currentDirectory + fileList[file]);													// * Set the ID of the current file
+		run("Bio-Formats Importer", "open=[" + currentDirectory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack stack_order=XYCZT series_1"); // * Opens the first image of the file - with the best resolution
+		ImageName = getTitle();																			// * Stores the name of the image
+		getDimensions(width, height, channels, slices, frames);											// * Gets its characteristics and stores them
+		if (1<channels) {																				// * | If the image has more than 1 channel
+			run("Split Channels");																		// * | Split the channels												
+			for (i = 0; i < channels; i++) {															// * || Loop through the channels
+				if (i+1!=channel) {																		// * || If the currently selected channel is not the good one...
+					selectWindow("C"+i+1+"-"+ ImageName);												// * || ... Select the associated image ...
+					close();																			// * || ... And close it
+				}
+			}
+			selectWindow("C"+channel+"-"+ ImageName);													// * | Select the remaining image - which is the channel we want to analyze
+		}
+		original=getImageID();
+		if (1<frames) {
+			for (i = 0; i < frames; i++) {
+				selectImage(original);																	// * || Select the original image
+				run("Duplicate...", "title=["+ImageName+" Time="+i+1+"] duplicate range="+i+1+"");		// * || Extract the current frame from the original image by duplicating it		
+				ImageNameframe = getTitle();															// * || Stores its title
+				frameID=getImageID();
+				selectImage(frameID);
+				run("Duplicate...", "duplicate title =["+ImageNameframe+"]"); 							// * Duplicate this image
+				RBA1name=getImageID();																	// * Gets and stocks its ID
+				run("Duplicate...", "duplicate title =["+ImageNameframe+"]");							// * Repeat
+				RBA2name=getImageID();																	// * 
+				selectImage(RBA1name);																	// * Select the first duplicata
+				run("Subtract Background...", "rolling="+RBA1+""); 			 							// * Substract its background with the rolling ball value chosen before
+				selectImage(RBA2name);																	// * Repeat on the 2nd duplicata, with another rolling ball value
+				run("Subtract Background...", "rolling="+RBA2+"");			     						// * 
+				imageCalculator("Multiply create", RBA1name , RBA2name);								// * Multiply pixels value of the 2 duplicatas with removed background
+				product=getImageID(); 																	// * Gets and stocks the ID of the product image
+				setOption("BlackBackground", false); 													// * Prepare for the next step - tells Fiji the background is black - low pixel value
+				selectImage(product);																	// * Select the product image
+				run("Convert to Mask","Otsu"); 				 											// * Make it binary using Default method
+				run("Open");								 											// * 'Open' the binary image - Erosion and Dilation - remove small objects
+				run("Watershed");																		// * Watershed - Separate particles in close proximity
+				roiManager("reset");																	// * Resets ROI manager to avoid errors
+				run("Analyze Particles...", "size="+minsize+"-Infinity show=Overlay exclude add "); 	// * Count particles in the binary image,using the min size defined before
+				roiManager("Show All without labels");					 								// * Outline these particles
+				allROIs=newArray("0");																	// * Variable initialization that will hold and record all the ROIs
+				for (k=1;k<roiManager("count");k++) { 													// * Loop through every ROI
+					allROIs = Array.concat(allROIs,k);													// * Concatenate these ROIs in an array
+				}
+				selectImage(frameID);																	// * Select the very first opened image
+				setSlice(1);
+				roiManager("Select", allROIs);															// * Select all the ROIs
+				roiManager("Add");																		// * Add them to the original image
+				roiManager("Set Color", "red");															// * Outline them with a red line
+				roiManager("Set Line Width", 1);														// * 
+				run("Flatten","Slice");																	// * Embed the lines in the image (for visual output)
+				Titles=Array.concat(Titles,ImageNameframe);												// * Gets image name and store it in an array
+				numberROIs=Array.concat(numberROIs,roiManager("count"));								// * And stores the number of ROIs for this image
+				selectImage(RBA1name);																	// * |
+				close();																				// * |
+				selectImage(RBA2name);																	// * |
+				close();																				// * |
+				selectImage(product);																	// * |
+				close();																				// * |
+				selectImage(frameID);
+				close();
+				roiManager("Save", SaveDirectory+file+ImageNameframe+"RoiSet.zip");						// * Save ROIs characteristics (coordinates, area, shape...)
+			}
+			selectImage(original);																		// * |
+			close();
+		}
+		else {
+			selectImage(original);
+			//run("Subtract Background...", "rolling=1000");	
+			run("Duplicate...", "duplicate title =["+ImageName+"]"); 									// * Duplicate this image
+			RBA1name=getImageID();																		// * Gets and stocks its ID
+			run("Duplicate...", "duplicate title =["+ImageName+"]");									// * Repeat
+			RBA2name=getImageID();																		// * 
+			selectImage(RBA1name);																		// * Select the first duplicata
+			run("Subtract Background...", "rolling="+RBA1+""); 	 										// * Substract its background with the rolling ball value chosen before
+			selectImage(RBA2name);																		// * Repeat on the 2nd duplicata, with another rolling ball value
+			run("Subtract Background...", "rolling="+RBA2+"");			     							// * 
+			imageCalculator("Multiply create", RBA1name , RBA2name);	     							// * Multiply pixels value of the 2 duplicatas with removed background
+			product=getImageID(); 																		// * Gets and stocks the ID of the product image
+			setOption("BlackBackground", true); 														// * Prepare for the next step - tells Fiji the background is black - low pixel value
+			selectImage(product);																		// * Select the product image
+			setAutoThreshold("Otsu dark");
+			run("Convert to Mask"); 								 									// * Make it binary using Default method
+			run("Open");											 									// * 'Open' the binary image - Erosion and Dilation - remove small objects
+			run("Watershed");																		 	// * Watershed - Separate particles in close proximity
+			roiManager("reset");																		// * Resets ROI manager to avoid errors
+			run("Analyze Particles...", "size="+minsize+"-Infinity show=Overlay exclude add "); 		// * Count particles in the binary image,using the min size defined before
+			if (0<roiManager("count")) {
+				roiManager("Show All without labels");					 								// * Outline these particles
+				allROIs=newArray("0");																	// * Variable initialization that will hold and record all the ROIs
+				for (k=1;k<roiManager("count");k++) { 													// * Loop through every ROI
+					allROIs = Array.concat(allROIs,k);													// * Concatenate these ROIs in an array
+				}
+				selectImage(original);																	// * Select the very first opened image
+				roiManager("Select", allROIs);															// * Select all the ROIs
+				roiManager("Add");																		// * Add them to the original image
+				roiManager("Set Color", "red");															// * Outline them with a red line
+				roiManager("Set Line Width", 1);														// * 
+				run("Flatten");																			// * Embed the lines in the image (for visual output)
+				roiManager("Save", SaveDirectory+file+"RoiSet.zip");									// * Save ROIs characteristics (coordinates, area, shape...)
+			}
+			Titles=Array.concat(Titles,ImageName);														// * Gets image name and store it in an array
+			numberROIs=Array.concat(numberROIs,roiManager("count"));									// * And stores the number of ROIs for this image
+			selectImage(original);																		// * | Cleanup - keep only the original image with the embedded lines
+			close();																					// * |
+			selectImage(RBA1name);																		// * |
+			close();																					// * |
+			selectImage(RBA2name);																		// * |
+			close();																					// * |
+			selectImage(product);																		// * |
+			close();																					// * |
+		}											
+		}
+	selectWindow("Nb granules");																		// Select the table that hold the results
+	Table.setColumn("Titles", Titles);																	// Prints the titles of the analyzed images in this table
+	Table.setColumn("Number of ROIs", numberROIs);														// Prints the associated numbers of ROIs for each image
+	run("Tile");																						// Order the remaining images on the screen
+}
+  
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+function loopprocessBioFormatFiles(currentDirectory,x,y,z,channel) {									// Slight tweaking of the previous function,comments only on the differences								
+	fileList = getFileList(currentDirectory); 																
+	numberROIs=newArray();
+	for (file = 0; file < fileList.length; file++) {
+		Ext.setId(currentDirectory + fileList[file]);	 
+		run("Bio-Formats Importer", "open=[" + currentDirectory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack stack_order=XYCZT series_1");
+		ImageName = getTitle();
+		getDimensions(width, height, channels, slices, frames);
+		if (1<channels) {
+			run("Split Channels");
+			for (i = 0; i < channels; i++) {
+				if (i+1!=channel) {
+					selectWindow("C"+i+1+"-"+ ImageName);
+					close();
+				}
+			}
+			selectWindow("C"+channel+"-"+ ImageName);
+		}	
+		original=getImageID(); 									 	
+		run("Duplicate...", "duplicate title =["+ImageName+"]");
+		RBA20=getImageID();
+		run("Duplicate...", "duplicate title =["+ImageName+"]"); 
+		RBA3=getImageID();
+		selectImage(RBA20);
+		run("Subtract Background...", "rolling="+x); 		
+		selectImage(RBA3);
+		run("Subtract Background...", "rolling="+y);			    
+		imageCalculator("Multiply create", RBA20 , RBA3);	    
+		product=getImageID(); 
+		setOption("BlackBackground", true); 				
+		selectImage(product);
+		run("Convert to Mask","Otsu"); 							
+		run("Open");											
+		run("Watershed");		
+		roiManager("reset");
+		run("Analyze Particles...", "size="+z+"-Infinity show=Overlay exclude add ");
+		numberROIs=Array.concat(numberROIs,roiManager("count"));
+		run("Close All");
+		run("Collect Garbage");
+		}
+	return numberROIs;																						// Returns the array containing the number of ROIs
+}
+  
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+function bacterialburden(currentDirectory,channel){															// Function to measure the summed pixel value in an image
+	  	totalfluo=newArray();																				// Initialize the variable that will hold the result
+	  	Table.create("Fluorescence");																		// Creates the table that will show the results
+		fileList = getFileList(currentDirectory); 															// Return an array with the files contained in the directory
+		Titles=newArray();																					// Initialize an array that will hold the titles of the analyzed images
+		for (file = 0; file < fileList.length; file++) {			 										// * Loop through the files in the directory
+			Ext.setId(currentDirectory + fileList[file]);													// * Set the ID of the current file
+			run("Bio-Formats Importer", "open=[" + currentDirectory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack stack_order=XYCZT series_1"); // * Opens the first image of the file - with the best resolution
+			ImageName = getTitle();																			// * Stores the name of the image
+			getDimensions(width, height, channels, slices, frames);											// * Gets its characteristics and stores them
+			if (1<channels) {																				// * | If the image has more than 1 channel
+				run("Split Channels");																		// * | Split the channels												
+				for (i = 0; i < channels; i++) {															// * || Loop through the channels
+					if (i+1!=channel) {																		// * || If the currently selected channel is not the good one...
+						selectWindow("C"+i+1+"-"+ ImageName);												// * || ... Select the associated image ...
+						close();																			// * || ... And close it
+					}
+				}
+				selectWindow("C"+channel+"-"+ ImageName);													// * | Select the remaining image - which is the channel we want to analyze
+			}
+			original=getImageID();																			// * Gets and stocks the ID of the currently selected image
+			if (1<frames) {																					// * | If the image has several frames - is a timelapse
+				for (i = 0; i < frames; i++) {																// * || Loop through the frames
+					selectImage(original);																	// * || Select the original image
+					run("Duplicate...", "title=["+ImageName+"-C=2 Time="+i+1+"] duplicate frames="+i+1+"");	// * || Extract the current frame from the original image by duplicating it
+					ImageNameframe = getTitle();															// * || Stores its title
+					if (1<slices) {																			// * || * If this image is a Z-stack
+						run("Z Project...", "projection=[Sum Slices]");										// * || * Do a Z projection with the sum of each slice
+					}
+					run("Set Measurements...", "area mean redirect=None decimal=3");						// * || Sets the measurements for the next step - we will want to measure the area and the mean value of the image
+					run("Measure");																			// * || Effectively measures these values
+					selectWindow("Results");																// * || Selects the results window
+					Area=Table.getColumn("Area");															// * || Gets the results of the measured Area	
+					Mean=Table.getColumn("Mean");															// * || Gets the results of the measured mean pixel value
+					Titles=Array.concat(Titles,ImageNameframe);												// * || Stores the name of the image that was analyzed
+					totalfluo=Array.concat(totalfluo,Area[(file*frames)+i]*Mean[(file*frames)+i]);			// * || Stores the total fluorescence of this image - Area x mean fluorescence for each frame
+				}
+			}
+			else {																							// * If the image has only one frame - Same steps as just above but for one frame		
+				if (1<slices) {																				
+					run("Z Project...", "projection=[Sum Slices]");											
+				}
+				run("Set Measurements...", "area mean redirect=None decimal=3");												
+				run("Measure");
+				selectWindow("Results");
+				Area=Table.getColumn("Area");
+				Mean=Table.getColumn("Mean");
+				Titles=Array.concat(Titles,ImageName);
+				totalfluo=Array.concat(totalfluo,Area[file]*Mean[file]);
+			}
+			run("Close All");																				// * Close All the opened images
+			run("Collect Garbage");																			// * Clean cache memory of Fiji
+		}
+		selectWindow("Fluorescence");																		// Select the results table
+		Table.setColumn("Titles", Titles);																	// Prints the titles of every image analyzed
+		Table.setColumn("Total fluorescence", totalfluo);													// And the associated total fluorescence
+}
+
+
+
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+//_________________________________________________________________________________________________________________________________________________________________________________
+
+
+function coord(Directory,ROIDirectory,bf) { 																//function to find coordinates of neutrophils
+	run ("Close All");																						//clean workspace
+	Table.create("Mean coordinates per fish");																//create result table
+	Titles=newArray("");																					//initialization of useful variables
+	midXArray=newArray();																					//											
+	midYArray=newArray();																					//
+	
+	run("Bio-Formats Macro Extensions");
+	 
+	ROIfileList = getFileList(ROIDirectory);																//ask directory for the ROI files
+	fileList = getFileList(Directory);																		//ask directory for the files to analyze
+	
+	for (file = 0; file < fileList.length; file++) {														//run through all the files of the file directory
+	
+		run("Bio-Formats Importer", "open=[" + Directory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack virtual=true stack_order=XYCZT");//open image
+		getDimensions(width, height, channels, slices, frames);												//gets info about image
+		ImageName = getTitle();																				//gets it title
+		original=getImageID();																				//and its ID
+		selectImage(original);																				//select it
+		run("Split Channels");																				//split its channels
+		selectWindow("C"+bf+"-"+ ImageName);																//select the brightfield channel
+	
+		if (1<frames) {																						//if there are several frames (i.e it is a "movie")
+			for (frame = 0; frame < frames; frame++){														//runs through the frames
+				selectWindow("C"+bf+"-"+ ImageName);														//select the brightfield channel
+				Stack.setFrame(frame+1);																	//select the frame of interest
+				run("Duplicate...", "title=["+ImageName+" Time="+frame+1+"]");								//isolate this frame by duplicating it
+				ImageNameframe = getTitle();																// Stores its title
+				frameID=getImageID();																		//and its ID
+				selectImage(frameID);																		//select it
+				roiManager("Open", ROIDirectory + ROIfileList[frame+file]);									//open the ROI file associated to this frame
+				if (0<roiManager("count")) {																// if blobs were detecteds, then : 
+					distances=newArray();																	//initializes useful values and variables
+					Titles=Array.concat(Titles,ImageNameframe);												//add the frame title to an array to stock it
+					X=newArray();																			//initialization
+					Y=newArray();																			//
+					selectImage(frameID);																	//select the frame image, and brightfield
+					run("Invert");																			//invert LUTs (black in white and white in black)
+					run("Find Maxima...", "prominence=1000000000 output=List");								//Find the brightest spot, should be the eye (i.e. the darkest spot before inverting)
+					selectWindow("Results");																//select the table showing coordinates of this spot
+					maxX=Table.getColumn("X");																//extract X and..
+					maxY=Table.getColumn("Y");																//..Y coordinates
+					getDimensions(width, height, channels, slices, void);									//gets dimensions of this frame
+					if (maxX[0]<width/2) {																	//if the eye is on the left, then
+						run("Flip Horizontally");															//flip image to put the eye on the right
+						selectWindow("Results");															//select to clean
+						run("Close");																		//clean
+						run("Find Maxima...", "prominence=1000000000 output=List");							//recalculates coordinates of the eye once the image is flipped
+						selectWindow("Results");															//select table to extract..
+						maxX=Table.getColumn("X");															//...X and...
+						maxY=Table.getColumn("Y");															//..Y coordinates
+						}
+					run("Coordinates...", "left="+0-maxX[0]+" right="+width-maxX[0]+" top="+0-maxY[0]+" bottom="+height-maxY[0]+"");//Set the center of the coordinate system to the eye (X=0, Y=0)
+					selectWindow("Results");																//clean
+					run("Close");																			//clean
+					selectWindow(ImageNameframe);															//select frame
+					run("Invert");																			//revert it to reach original state
+				
+					for (i = 0; i < roiManager("count"); i++) {												//for each ROI (each blob)
+					roiManager("Select", i);																//select it
+					Roi.getCoordinates(xpoints, ypoints);													//gets it coordinates in the new coordinate system
+					X=Array.concat(X,xpoints);																//store them
+					Y=Array.concat(Y,ypoints);																//
+					}
+		
+					midX=0;																					//initialization
+					for (i = 0; i < X.length; i++) {														//for every X coordinate in the results
+						midX+=X[i];																			//sum them up
+					}
+					midX=midX/X.length;																		//calculate the mean X coordinate of blobs in the fish
+				
+					midY=0;																					//same but for Y												
+					for (i = 0; i < X.length; i++) {
+						midY+=Y[i];
+					}
+					midY=midY/Y.length;
+				
+					midXArray=Array.concat(midXArray,midX-maxX[0]);											//Save these values
+					midYArray=Array.concat(midYArray,midY-maxY[0]);											//
+				
+				
+					selectWindow(ImageNameframe);															//show the mean coordinates of blobs in the fish
+					run("RGB Color");
+					makeOval(midX, midY, 10, 10);
+					run("Fill", "stack");
+				
+					selectWindow("ROI Manager");															//clean
+					run("Close");
+				}
+				}
+			
+				
+				selectWindow("Mean coordinates per fish");
+				Table.setColumn("Titles", Titles);															// Show results in a table
+				Table.setColumn("meanX", midXArray);
+				Table.setColumn("meanY", midYArray);
+		
+		
+			}
+			
+		
+		
+		else {																								//if we have a single image (i.e. no frames, so not a movie)
+			roiManager("Open", ROIDirectory + ROIfileList[file]);											//repeat the same process but as if it was one frame
+			distances=newArray();
+			Titles=Array.concat(Titles,ImageName);
+			X=newArray();
+			Y=newArray();
+			selectWindow("C"+bf+"-"+ ImageName);
+			run("Invert");
+			run("Find Maxima...", "prominence=1000000000 output=List");
+			selectWindow("Results");
+			maxX=Table.getColumn("X");
+			maxY=Table.getColumn("Y");
+			getDimensions(width, height, channels, slices, frames);
+			if (maxX[0]<width/2) {
+			run("Flip Horizontally");
+			selectWindow("Results");
+			run("Close");
+			run("Find Maxima...", "prominence=1000000000 output=List");
+			selectWindow("Results");
+			maxX=Table.getColumn("X");
+			maxY=Table.getColumn("Y");
+			}
+			run("Coordinates...", "left="+0-maxX[0]+" right="+width-maxX[0]+" top="+0-maxY[0]+" bottom="+height-maxY[0]+"");
+			selectWindow("Results");
+			run("Close");
+			selectWindow("C"+bf+"-"+ ImageName);
+			run("Invert");
+			
+			for (i = 0; i < roiManager("count"); i++) {
+				roiManager("Select", i);
+				Roi.getCoordinates(xpoints, ypoints);
+				X=Array.concat(X,xpoints);
+				Y=Array.concat(Y,ypoints);
+			}
+			
+			
+			midX=0;
+			for (i = 0; i < X.length; i++) {
+				midX+=X[i];
+			}
+			midX=midX/X.length;
+			
+			midY=0;
+			for (i = 0; i < X.length; i++) {
+				midY+=Y[i];
+			}
+			midY=midY/Y.length;
+			
+			midXArray=Array.concat(midXArray,midX-maxX[0]);
+			midYArray=Array.concat(midYArray,midY-maxY[0]);
+
+			selectWindow("ROI Manager");
+			run("Close");
+			}
+			
+			selectWindow("Mean coordinates per fish");
+			Table.setColumn("Titles", Titles);								
+			Table.setColumn("meanX", midXArray);
+			Table.setColumn("meanY", midYArray);
+	}	
+	run("Tile");
+}
+
+
+function characterization(Directory,ROIDirectory,flu) { 													//Function to characterize the shapes of the blobs
+	run ("Close All");																						//clean
+	Table.create("Mean per fish");																			//create result table
+	ArrayCirc=newArray();																					//initialize usefule arrays
+	ArrayAR=newArray();
+	ArrayRound=newArray();
+	ArraySolidity=newArray();
+	Titles=newArray("");
+	run("Bio-Formats Macro Extensions");
+	ROIfileList = getFileList(ROIDirectory);																//get path to ROI files
+	fileList = getFileList(Directory);																		//get path to image files
+	for (file = 0; file < fileList.length; file++) {														//for every image
+		roiManager("Open", ROIDirectory + ROIfileList[file]);												//open the associated ROI file
+		nbROI=roiManager("count");																			//count the ROIs
+		run("Bio-Formats Importer", "open=[" + Directory + fileList[file] + "] autoscale color_mode=Default view=Hyperstack virtual=true stack_order=XYCZT");//open image
+		ImageName = getTitle();																				//gets its title
+		Titles=Array.concat(Titles,ImageName);																// stores it
+		buffer=newArray(nbROI-1);																			//buffer only for presentation, will show 0 in the result table under the titles
+		Titles=Array.concat(Titles,buffer);																	//add this buffer to space out the titles by a number of lines corresponding to the numbers of blobs in the picture
+		run("Split Channels");																				//split channels
+		selectWindow("C"+bf+"-"+ ImageName);																//select brightfield channel
+		if (0<roiManager("count")) {																		//if we have blobs associated to the picture
+			run("Select All");																				//select them all
+			run("Set Measurements...", "area mean shape redirect=None decimal=3");							//measure their shapes
+			roiManager("Measure");
+			selectWindow("Results");	
+			
+			Circ=Table.getColumn("Circ.");																	//and store the results
+			ArrayCirc=Array.concat(ArrayCirc,Circ);
+			
+			AR=Table.getColumn("AR");
+			ArrayAR=Array.concat(ArrayAR,AR);
+			
+			Round=Table.getColumn("Round");
+			ArrayRound=Array.concat(ArrayRound,Round);
+			
+			Solidity=Table.getColumn("Solidity");
+			ArraySolidity=Array.concat(ArraySolidity,Solidity);
+		}
+		selectWindow("Results");																			//clean
+		run("Close");	
+		selectWindow("ROI Manager");
+		run("Close");
+		selectWindow("Mean per fish");
+		Table.setColumn("Titles", Titles);																	// Show results in a table
+		Table.setColumn("Circ.", ArrayCirc);
+		Table.setColumn("AR", ArrayAR);
+		Table.setColumn("Round", ArrayRound);
+		Table.setColumn("Solidity", ArraySolidity);
+		}
+	run("Close All");
+	}
